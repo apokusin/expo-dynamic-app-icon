@@ -36,10 +36,13 @@ const ipad152Scale = 2.53;
 const ipad167Scale = 2.78;
 const iosScales = [2, 3, ipad152Scale, ipad167Scale];
 
-type IconSet = Record<string, { image: string; prerendered?: boolean }>;
+type IconSet = Record<string, { image: string; prerendered?: boolean; android?: { foregroundImage: string; backgroundImage: string } }>;
 
 type Props = {
-  icons: Record<string, { image: string; prerendered?: boolean }>;
+  icons: Record<
+    string,
+    { image: string; prerendered?: boolean, android?: { foregroundImage: string; backgroundImage: string } }
+  >;
 };
 
 function arrayToImages(images: string[]) {
@@ -79,7 +82,6 @@ const withDynamicIcon: ConfigPlugin<string[] | IconSet | void> = (
 const withIconAndroidManifest: ConfigPlugin<Props> = (config, { icons }) => {
   return withAndroidManifest(config, (config) => {
     const mainApplication: any = getMainApplicationOrThrow(config.modResults);
-    const mainActivity = getMainActivityOrThrow(config.modResults);
 
     const iconNamePrefix = `${config.android!.package}.MainActivity`;
     const iconNames = Object.keys(icons);
@@ -92,17 +94,18 @@ const withIconAndroidManifest: ConfigPlugin<Props> = (config, { icons }) => {
             "android:name": `${iconNamePrefix}${iconName}`,
             "android:enabled": "false",
             "android:exported": "true",
-            "android:icon": `@mipmap/${iconName}`,
+            "android:icon": `@mipmap/ic_launcher_${iconName}`, // Adaptive icon resource
+            "android:roundIcon": `@mipmap/ic_launcher_${iconName}_round`, // Adaptive icon (round)
             "android:targetActivity": ".MainActivity",
           },
-          "intent-filter": [...mainActivity["intent-filter"] || [
+          "intent-filter": [
             {
               action: [{ $: { "android:name": "android.intent.action.MAIN" } }],
               category: [
                 { $: { "android:name": "android.intent.category.LAUNCHER" } },
               ],
             },
-          ]]
+          ],
         })),
       ];
     }
@@ -126,6 +129,7 @@ const withIconAndroidManifest: ConfigPlugin<Props> = (config, { icons }) => {
   });
 };
 
+
 const withIconAndroidImages: ConfigPlugin<Props> = (config, { icons }) => {
   return withDangerousMod(config, [
     "android",
@@ -134,6 +138,70 @@ const withIconAndroidImages: ConfigPlugin<Props> = (config, { icons }) => {
         config.modRequest.platformProjectRoot,
         ...androidFolderPath
       );
+
+
+      async function generateAndWriteImage(imagePath: string, outputPath: string, size: number) {
+        try {
+          const { source } = await generateImageAsync(
+            {
+              projectRoot: config.modRequest.platformProjectRoot, // Assuming you have 'config' available 
+              cacheType: "react-native-dynamic-app-icon",
+            },
+            {
+              src: imagePath,
+              width: size,
+              height: size,
+              resizeMode: "contain", // Or 'cover' depending on your preference
+              backgroundColor: "transparent", // Or any desired color
+            }
+          );
+
+          await fs.promises.writeFile(outputPath, source);
+        } catch (error) {
+          console.error(`Error generating or writing image: ${error}`);
+        }
+      }
+
+      const androidForegroundSize = 108; // Standard foreground size 
+      const androidBackgroundSize = 108; // Standard background size
+
+      async function generateIconResource(iconName: string, foregroundImage: string, backgroundImage: string, outputFolder: string) {
+        // Create XML adaptive icon resource file
+        const adaptiveIconXml = `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_${iconName}_background" />
+    <foreground android:drawable="@drawable/ic_launcher_${iconName}_foreground" />
+</adaptive-icon>`;
+
+        const adaptiveIconPath = path.join(outputFolder, `ic_launcher_${iconName}.xml`);
+        await fs.promises.writeFile(adaptiveIconPath, adaptiveIconXml);
+
+        // Generate background (optional)
+        if (backgroundImage) {
+          const backgroundOutputPath = path.join(outputFolder, `ic_launcher_${iconName}_background.png`);
+          await generateAndWriteImage(backgroundImage, backgroundOutputPath, androidBackgroundSize);
+        }
+
+        // Generate foreground
+        const foregroundOutputPath = path.join(outputFolder, `ic_launcher_${iconName}_foreground.png`);
+        await generateAndWriteImage(foregroundImage, foregroundOutputPath, androidForegroundSize);
+      }
+
+      async function generateIconRoundResource(iconName: string, foregroundImage: string, backgroundImage: string, outputFolder: string) {
+        // Create XML adaptive icon resource file (round)
+        const adaptiveIconRoundXml = `<?xml version="1.0" encoding="utf-8"?>
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ic_launcher_background" /> 
+    <foreground android:drawable="@drawable/ic_launcher_${iconName}_foreground" />
+</adaptive-icon>`;
+
+        const adaptiveIconRoundPath = path.join(outputFolder, `ic_launcher_${iconName}_round.xml`);
+        await fs.promises.writeFile(adaptiveIconRoundPath, adaptiveIconRoundXml);
+
+        // Generate foreground (assuming the foreground is the same)
+        const foregroundOutputPath = path.join(outputFolder, `ic_launcher_${iconName}_foreground.png`);
+        await generateAndWriteImage(foregroundImage, foregroundOutputPath, androidForegroundSize);
+      }
 
       const removeIconRes = async () => {
         for (let i = 0; androidFolderNames.length > i; i += 1) {
@@ -154,28 +222,43 @@ const withIconAndroidImages: ConfigPlugin<Props> = (config, { icons }) => {
           const size = androidSize[i];
           const outputPath = path.join(androidResPath, androidFolderNames[i]);
 
-          for (const [name, { image }] of Object.entries(icons)) {
-            const fileName = `${name}.png`;
+          for (const [name, iconProps] of Object.entries(icons)) {
+            if (iconProps.android) {
+              const { foregroundImage, backgroundImage } = iconProps.android;
 
-            const { source } = await generateImageAsync(
-              {
-                projectRoot: config.modRequest.projectRoot,
-                cacheType: "react-native-dynamic-app-icon",
-              },
-              {
-                name: fileName,
-                src: image,
-                // removeTransparency: true,
-                backgroundColor: "#ffffff",
-                resizeMode: "cover",
-                width: size,
-                height: size,
-              }
-            );
-            await fs.promises.writeFile(
-              path.join(outputPath, fileName),
-              source
-            );
+              await generateIconResource(
+                name,
+                foregroundImage,
+                backgroundImage,
+                outputPath
+              );
+              await generateIconRoundResource(name, foregroundImage, backgroundImage, outputPath);
+            } else {
+              const fileName = `${name}.png`;
+
+              const { source } = await generateImageAsync(
+                {
+                  projectRoot: config.modRequest.projectRoot,
+                  cacheType: "react-native-dynamic-app-icon",
+                },
+                {
+                  name: fileName,
+                  src: iconProps.image,
+                  // removeTransparency: true,
+                  backgroundColor: "#ffffff",
+                  resizeMode: "cover",
+                  width: size,
+                  height: size,
+                }
+              );
+
+              await fs.promises.writeFile(
+                path.join(outputPath, fileName),
+                source
+              );
+            }
+
+
           }
         }
         // for (const size of ) {
@@ -199,14 +282,14 @@ const withIconAndroidImages: ConfigPlugin<Props> = (config, { icons }) => {
 
 // for ios
 function getIconName(name: string, size: number, scale?: number) {
-  
+
   const fileName = `${name}-Icon-$${size}x${size}`;
 
   if (scale != null) {
-    if(scale == ipad152Scale){
+    if (scale == ipad152Scale) {
       return `${fileName}@2x~ipad.png`;
     }
-    if(scale == ipad167Scale){
+    if (scale == ipad167Scale) {
       return `${fileName}@3x~ipad.png`;
     }
     return `${fileName}@${scale}x.png`;
