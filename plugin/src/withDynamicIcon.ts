@@ -22,6 +22,7 @@ const {
 
 const androidFolderPath = ["app", "src", "main", "res"];
 const androidFolderNames = [
+  "mipmap",
   "mipmap-hdpi",
   "mipmap-mdpi",
   "mipmap-xhdpi",
